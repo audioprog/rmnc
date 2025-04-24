@@ -7,8 +7,9 @@ export component AppWindow inherits Window {
 
     in-out property <float> pitch: 0.15;
     in-out property <float> yaw: 0.5;
+    in-out property <int> dummy_property: 0; // Dummy property to force updates
 
-    pure callback render_plot(/* width */ int, /* height */ int, /* pitch */ float, /* yaw */ float, /* amplitude */ float) -> image;
+    pure callback render_plot(/* width */ int, /* height */ int, /* pitch */ float, /* yaw */ float, /* amplitude */ float, /* dummy_property */ int) -> image;
 
     VerticalBox {
         HorizontalBox {
@@ -29,7 +30,7 @@ export component AppWindow inherits Window {
         Image {
             width: 1000px;
             height: 256px;
-            source: root.render_plot(self.width / 1px, self.height / 1px, root.pitch, root.yaw, amplitude-slider.value / 10);
+            source: root.render_plot(self.width / 1px, self.height / 1px, root.pitch, root.yaw, amplitude-slider.value / 10, root.dummy_property);
             touch := TouchArea {
                 property <float> pressed-pitch;
                 property <float> pressed-yaw;

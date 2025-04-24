@@ -3,6 +3,8 @@
 
 use std::error::Error;
 use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleRate, Stream};
 use slint::{SharedVector, SharedPixelBuffer};
@@ -22,17 +24,27 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // Verbinden Sie die render_plot-Callback-Funktion
     let waveform_data_clone = waveform_data.clone();
-    ui.on_render_plot(move |_width, _height, _pitch, _yaw, _amplitude| {
+    ui.on_render_plot(move |_width, _height, _pitch, _yaw, _amplitude, _| {
         let data = waveform_data_clone.lock().unwrap();
         render_plot(&data, _width, _height)
     });
+
+    // Timer für regelmäßiges Rendern (nutze Slint's Timer API, damit UI-Objekte nicht in Threads verschoben werden)
+    let ui_weak = ui.as_weak();
+    let timer = slint::Timer::default();
+    timer.set_interval(std::time::Duration::from_millis(50));
+    timer.start(slint::TimerMode::Repeated, std::time::Duration::from_millis(50), move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_dummy_property(ui.get_dummy_property() + 1); // Dummy property to trigger UI update
+            }
+        });
 
     ui.run()?;
     drop(stream); // Stream wird hier gedroppt, wenn das UI geschlossen wird
     Ok(())
 }
 
-fn start_audio_stream(waveform_data: Arc<Mutex<SharedVector<f32>>>) -> Result<(Stream), Box<dyn Error>> {
+fn start_audio_stream(waveform_data: Arc<Mutex<SharedVector<f32>>>) -> Result<Stream, Box<dyn Error>> {
     let host = cpal::default_host();
     let device = host.default_input_device().expect("No input device available");
     println!("Using input device: {}", device.name()?);
