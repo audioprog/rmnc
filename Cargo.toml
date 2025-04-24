@@ -1,0 +1,15 @@
+[package]
+name = "rmnc"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+cpal = "0.15"
+image = "0.25"
+slint = { version = "1.11", features = ["renderer-winit-skia"] }
+num-traits = "0.2"
+
+[build-dependencies]
+slint-build = "1.11"

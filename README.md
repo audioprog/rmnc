@@ -1,2 +1,1 @@
-# rmnc
-RecMasterNCutter2
+# RecMaster aNd Cutter
