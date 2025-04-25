@@ -176,7 +176,13 @@ fn render_plot(waveform_data: &[f32], width: i32, height: i32) -> slint::Image {
     // Zeichne die Wellenform
     let center_y = height as f32 / 2.0;
 
-    
+    // Ermittle das Maximum aus waveform_data
+    let max_amplitude = waveform_data
+        .iter()
+        .cloned()
+        .fold(0.0_f32, |a, b| a.max(b.abs()));
+
+    let scale = if max_amplitude > 0.0 { 1.0 / max_amplitude } else { 1.0 };
 
     for (i, chunk) in waveform_data.chunks(2).enumerate() {
         if i >= width as usize {
@@ -184,8 +190,9 @@ fn render_plot(waveform_data: &[f32], width: i32, height: i32) -> slint::Image {
         }
 
         let x = i as u32;
-        let y_min = center_y + chunk[0] * center_y;
-        let y_max = center_y + chunk[1] * center_y;
+        // Skaliere die Amplitude auf den maximalen Wert, damit die Darstellung immer voll ausgesteuert ist
+        let y_min = center_y + chunk[0] * center_y * scale;
+        let y_max = center_y + chunk[1] * center_y * scale;
 
         img.put_pixel(x as u32, center_y as u32, Rgba([100, 100, 255, 255]));
 
