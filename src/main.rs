@@ -9,6 +9,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleRate, Stream};
 use slint::{SharedVector, SharedPixelBuffer};
 use num_traits::ToPrimitive;
+use std::cell::RefCell;
 
 slint::include_modules!();
 
@@ -102,11 +103,54 @@ fn process_audio<T: cpal::Sample + ToPrimitive>(data: &[T], waveform_data: &Arc<
     let mut min_max_data = vec![];
 
     // Gruppiere alle 128 Samples und berechne Min/Max
-    for chunk in data.chunks(128) {
-        let min = chunk.iter().filter_map(|&s| s.to_f32()).fold(f32::INFINITY, f32::min);
-        let max = chunk.iter().filter_map(|&s| s.to_f32()).fold(f32::NEG_INFINITY, f32::max);
-        min_max_data.push(min);
-        min_max_data.push(max);
+    // Statischer Buffer für überstehende Daten zwischen den Aufrufen
+    thread_local! {
+        static REMAINDER: RefCell<Vec<f32>> = RefCell::new(Vec::new());
+    }
+
+    // Konvertiere eingehende Daten in f32
+    let mut samples: Vec<f32> = data.iter().filter_map(|&s| s.to_f32()).collect();
+
+    // Füge evtl. übrig gebliebene Samples vom letzten Aufruf vorne an
+    REMAINDER.with(|rem| {
+        let mut rem = rem.borrow_mut();
+        if !rem.is_empty() {
+            let mut new_samples = Vec::with_capacity(rem.len() + samples.len());
+            new_samples.extend_from_slice(&rem);
+            new_samples.extend_from_slice(&samples);
+            samples.clear();
+            samples.extend(new_samples);
+            rem.clear();
+        }
+    });
+
+    // Verarbeite nur vollständige Chunks
+    let chunk_size = 2048;
+    let full_chunks = samples.len() / chunk_size;
+    for chunk in samples.chunks(chunk_size).take(full_chunks) {
+        let left_channel = chunk.iter().step_by(2); // Linker Kanal
+        let right_channel = chunk.iter().skip(1).step_by(2); // Rechter Kanal
+
+        let min_left = left_channel.clone().fold(f32::INFINITY, |a, &b| f32::min(a, b));
+        let max_left = left_channel.clone().fold(f32::NEG_INFINITY, |a, &b| f32::max(a, b));
+
+        let min_right = right_channel.clone().fold(f32::INFINITY, |a, &b| f32::min(a, b));
+        let max_right = right_channel.clone().fold(f32::NEG_INFINITY, |a, &b| f32::max(a, b));
+
+        // Berechne die größte Abweichung von 0 für den linken Kanal
+        let max_deviation_left = if min_left.abs() > max_left.abs() { min_left.abs() } else { max_left.abs() };
+        min_max_data.push(-max_deviation_left); // Linker Kanal (nach oben)
+        // Berechne die größte Abweichung von 0 für den rechten Kanal
+        let max_deviation_right = if min_right.abs() > max_right.abs() { min_right.abs() } else { max_right.abs() };
+        min_max_data.push(max_deviation_right); // Linker Kanal (nach oben)
+    }
+
+    // Überstehende Samples für den nächsten Aufruf zwischenspeichern
+    let remainder = samples.len() % chunk_size;
+    if remainder > 0 {
+        REMAINDER.with(|rem| {
+            rem.borrow_mut().extend_from_slice(&samples[samples.len() - remainder..]);
+        });
     }
 
     // Aktualisiere die SharedVector-Daten
@@ -116,8 +160,8 @@ fn process_audio<T: cpal::Sample + ToPrimitive>(data: &[T], waveform_data: &Arc<
     }
 
     // Begrenze die Länge des Verlaufs (z. B. 1000 Punkte)
-    if waveform.len() > 1000 {
-        let excess = waveform.len() - 1000;
+    if waveform.len() > 2000 {
+        let excess = waveform.len() - 2000;
         let new_waveform: SharedVector<f32> = waveform[excess..].into(); // Kopiere nur die letzten 1000 Elemente
         *waveform = new_waveform; // Ersetze den alten Vektor
     }
@@ -131,7 +175,8 @@ fn render_plot(waveform_data: &[f32], width: i32, height: i32) -> slint::Image {
 
     // Zeichne die Wellenform
     let center_y = height as f32 / 2.0;
-    let step = width as usize / (waveform_data.len() / 2).max(1);
+
+    
 
     for (i, chunk) in waveform_data.chunks(2).enumerate() {
         if i >= width as usize {
@@ -139,19 +184,41 @@ fn render_plot(waveform_data: &[f32], width: i32, height: i32) -> slint::Image {
         }
 
         let x = i as u32;
-        let y_min = center_y - chunk[0] * center_y;
-        let y_max = center_y - chunk[1] * center_y;
+        let y_min = center_y + chunk[0] * center_y;
+        let y_max = center_y + chunk[1] * center_y;
+
+        img.put_pixel(x as u32, center_y as u32, Rgba([100, 100, 255, 255]));
 
         if y_min >= 0.0 && y_min < height as f32 {
-            img.put_pixel(x, y_min as u32, Rgba([0, 255, 0, 255])); // Grün für Min
+            // Zeichne eine Linie von center_y nach y_min (vertikal)
+            let y0 = center_y as u32;
+            let y1 = y_min as u32;
+            if y0 != y1 {
+                let (start, end) = if y0 < y1 { (y0 - 1, y1) } else { (y1, y0 - 1) };
+                for y in start..=end {
+                    if y >= 0 as u32 && y < height as u32 {
+                        img.put_pixel(x, y, Rgba([0, 255, 0, 255])); // Grün für Min-Linie
+                    }
+                }
+            }
         }
         if y_max >= 0.0 && y_max < height as f32 {
-            img.put_pixel(x, y_max as u32, Rgba([255, 0, 0, 255])); // Rot für Max
+            // Zeichne eine Linie von center_y nach y_max (vertikal)
+            let y0 = center_y as u32;
+            let y1 = y_max as u32;
+            if y0 != y1 {
+                let (start, end) = if y0 < y1 { (y0 + 1, y1) } else { (y1, y0 + 1) };
+                for y in start..=end {
+                    if y >= 0 as u32 && y < height as u32 {
+                        img.put_pixel(x, y, Rgba([255, 100, 100, 255])); // Rot für Min-Linie
+                    }
+                }
+            }
         }
     }
 
     // Konvertiere das Bild in ein SharedPixelBuffer
-    let buffer = SharedPixelBuffer::clone_from_slice(&img.into_raw(), height.try_into().unwrap(), width.try_into().unwrap());
+    let buffer = SharedPixelBuffer::clone_from_slice(&img.into_raw(), width.try_into().unwrap(), height.try_into().unwrap());
     slint::Image::from_rgba8_premultiplied(buffer)
 }
 
