@@ -1,3 +1,7 @@
 fn main() {
-    slint_build::compile("ui/app-window.slint").expect("Slint build failed");
+    slint_build::compile_with_config(
+        "ui/main.slint",
+        slint_build::CompilerConfiguration::new(),
+    )
+    .expect("Slint build failed");
 }

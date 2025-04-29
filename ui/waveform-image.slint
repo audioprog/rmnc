@@ -1,0 +1,38 @@
+export component WaveformImage inherits Image {
+    in-out property <float> pitch: 0.15;
+    in-out property <float> yaw: 0.5;
+    in-out property <int> dummy_property: 0; // Dummy property to force updates
+    in-out property <float> amplitude: 0.5;
+
+    pure callback render_plot(/* width */ int, /* height */ int, /* pitch */ float, /* yaw */ float, /* amplitude */ float, /* dummy_property */ int) -> image;
+
+    width: 1000px;
+    height: 256px;
+    source: root.render_plot(
+        self.width / 1px,
+        self.height / 1px,
+        root.pitch,
+        root.yaw,
+        root.amplitude,
+        root.dummy_property
+    );
+
+    touch := TouchArea {
+        property <float> pressed-pitch;
+        property <float> pressed-yaw;
+
+        pointer-event(event) => {
+            if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
+                self.pressed-pitch = root.pitch;
+                self.pressed-yaw = root.yaw;
+            }
+        }
+        moved => {
+            if (self.enabled && self.pressed) {
+                root.pitch = self.pressed-pitch + (touch.mouse-y - touch.pressed-y) / self.height * 3.14;
+                root.yaw = self.pressed-yaw - (touch.mouse-x - touch.pressed-x) / self.width * 3.14;
+            }
+        }
+        mouse-cursor: self.pressed ? MouseCursor.grabbing : MouseCursor.grab;
+    }
+}
