@@ -34,9 +34,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     let ui_weak = ui.as_weak();
     let timer = slint::Timer::default();
     timer.set_interval(std::time::Duration::from_millis(50));
+    let waveform_data_for_timer = waveform_data.clone();
     timer.start(slint::TimerMode::Repeated, std::time::Duration::from_millis(50), move || {
             if let Some(ui) = ui_weak.upgrade() {
-                ui.set_dummy_property(ui.get_dummy_property() + 1); // Dummy property to trigger UI update
+                let data = waveform_data_for_timer.lock().unwrap();
+                ui.set_test(slint::ModelRc::from(data.as_slice())); // Dummy property to trigger UI update
             }
         });
 
