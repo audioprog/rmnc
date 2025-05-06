@@ -5,12 +5,10 @@ export component AppWindow inherits Window {
     callback stop();
     callback pause();
 
-    in-out property <float> pitch: 0.15;
-    in-out property <float> yaw: 0.5;
-    in-out property <int> dummy_property: 0; // Dummy property to force updates
-    in-out property <[float]> test: [0.5, 0.2, -0.3, -0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]; // Dummy data for testing
+    in-out property <int> wav1start: 0;
+    in-out property <[{l: float, r: float}]> wav1; // Extended dummy data for testing
 
-    pure callback render_plot(/* width */ int, /* height */ int, /* pitch */ float, /* yaw */ float, /* amplitude */ float, /* dummy_property */ int) -> image;
+    min-width: 1010px;
 
     VerticalBox {
         HorizontalBox {
@@ -31,29 +29,27 @@ export component AppWindow inherits Window {
         Rectangle {
             height: 200px;
             width: 1000px;
-            for item[idx] in root.test: Rectangle {
+            for item[idx] in root.wav1: Rectangle {
                 width: 1px;
                 padding: 0px;
                 border-width: 0px;
-                height: item * parent.height / 2;
-                y: (parent.height / 2) - (Math.mod(idx, 2) - 1) * item * (parent.height / 2);
-                x: idx / 2 * 1px;
+                height: item.l * parent.height / 4;
+                y: parent.height / 4 - item.l * (parent.height / 8);
+                x: (idx - wav1start) * 1px;
+                background: blue;
+            }
+            for item[idx] in root.wav1: Rectangle {
+                width: 1px;
+                padding: 0px;
+                border-width: 0px;
+                height: item.r * parent.height / 4;
+                y: parent.height / 4 * 3 - item.r * (parent.height / 8);
+                x: (idx - wav1start) * 1px;
                 background: blue;
             }
         }
         
         HorizontalBox {
-            Text {
-                text: "Amplitude:";
-                font-weight: 600;
-                vertical-alignment: center;
-            }
-
-            amplitude-slider := Slider {
-                minimum: 0;
-                maximum: 100;
-                value: 50;
-            }
         }
     }
 }

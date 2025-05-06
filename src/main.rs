@@ -3,11 +3,9 @@
 
 use std::error::Error;
 use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::Duration;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleRate, Stream};
-use slint::{SharedVector, SharedPixelBuffer};
+use slint::SharedVector;
 use num_traits::ToPrimitive;
 use std::cell::RefCell;
 
@@ -15,20 +13,13 @@ slint::include_modules!();
 
 fn main() -> Result<(), Box<dyn Error>> {
     let ui = AppWindow::new()?;
-    let waveform_data = Arc::new(Mutex::new(SharedVector::default()));
+    let waveform_data = Arc::new(Mutex::new(SharedVector::<(f32, f32)>::default()));
 
     // Starten des Audio-Streams
     let waveform_data_clone = waveform_data.clone();
     // Der Stream muss bis zum Programmende erhalten bleiben, daher außerhalb des Threads speichern
     let stream = start_audio_stream(waveform_data_clone).expect("Failed to start audio stream");
     // stream wird im Scope gehalten, damit es nicht gedroppt wird
-
-    // Verbinden Sie die render_plot-Callback-Funktion
-    let waveform_data_clone = waveform_data.clone();
-    ui.on_render_plot(move |_width, _height, _pitch, _yaw, _amplitude, _| {
-        let data = waveform_data_clone.lock().unwrap();
-        render_plot(&data, _width, _height)
-    });
 
     // Timer für regelmäßiges Rendern (nutze Slint's Timer API, damit UI-Objekte nicht in Threads verschoben werden)
     let ui_weak = ui.as_weak();
@@ -38,7 +29,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     timer.start(slint::TimerMode::Repeated, std::time::Duration::from_millis(50), move || {
             if let Some(ui) = ui_weak.upgrade() {
                 let data = waveform_data_for_timer.lock().unwrap();
-                ui.set_test(slint::ModelRc::from(data.as_slice())); // Dummy property to trigger UI update
+                ui.set_wav1(slint::ModelRc::from(data.as_slice()));
+                ui.set_wav1start(((data.len() as isize) - 1000) as i32);
             }
         });
 
@@ -47,7 +39,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn start_audio_stream(waveform_data: Arc<Mutex<SharedVector<f32>>>) -> Result<Stream, Box<dyn Error>> {
+fn start_audio_stream(waveform_data: Arc<Mutex<SharedVector<(f32, f32)>>>) -> Result<Stream, Box<dyn Error>> {
     let host = cpal::default_host();
     let device = host.default_input_device().expect("No input device available");
     println!("Using input device: {}", device.name()?);
@@ -64,8 +56,16 @@ fn start_audio_stream(waveform_data: Arc<Mutex<SharedVector<f32>>>) -> Result<St
             cpal::SupportedBufferSize::Range { min, max } => {
                 println!("Buffer Size Range: min = {}, max = {}", min, max);
                 let size = (*max).min(1024 * 4 * 1024);
-                println!("Buffer Size: {}", size);
-                cpal::BufferSize::Fixed(size)
+                if size < *min {
+                    println!("Buffer size adjusted to minimum: {}", min);
+                    cpal::BufferSize::Fixed(*min)
+                } else if size >= *max {
+                    println!("Buffer Size: Unknown");
+                    cpal::BufferSize::Default
+                } else {
+                    println!("Buffer Size: {}", size);
+                    cpal::BufferSize::Fixed(size)
+                }
             }
             cpal::SupportedBufferSize::Unknown => {
                 println!("Buffer Size: Unknown");
@@ -101,7 +101,7 @@ fn start_audio_stream(waveform_data: Arc<Mutex<SharedVector<f32>>>) -> Result<St
     Ok(stream)
 }
 
-fn process_audio<T: cpal::Sample + ToPrimitive>(data: &[T], waveform_data: &Arc<Mutex<SharedVector<f32>>>) {
+fn process_audio<T: cpal::Sample + ToPrimitive>(data: &[T], waveform_data: &Arc<Mutex<SharedVector<(f32, f32)>>>) {
     let mut min_max_data = vec![];
 
     // Gruppiere alle 128 Samples und berechne Min/Max
@@ -141,10 +141,9 @@ fn process_audio<T: cpal::Sample + ToPrimitive>(data: &[T], waveform_data: &Arc<
 
         // Berechne die größte Abweichung von 0 für den linken Kanal
         let max_deviation_left = if min_left.abs() > max_left.abs() { min_left.abs() } else { max_left.abs() };
-        min_max_data.push(-max_deviation_left); // Linker Kanal (nach oben)
         // Berechne die größte Abweichung von 0 für den rechten Kanal
         let max_deviation_right = if min_right.abs() > max_right.abs() { min_right.abs() } else { max_right.abs() };
-        min_max_data.push(max_deviation_right); // Linker Kanal (nach oben)
+        min_max_data.push((max_deviation_left,max_deviation_right)); // Linker Kanal (nach oben)
     }
 
     // Überstehende Samples für den nächsten Aufruf zwischenspeichern
@@ -163,72 +162,10 @@ fn process_audio<T: cpal::Sample + ToPrimitive>(data: &[T], waveform_data: &Arc<
 
     // Begrenze die Länge des Verlaufs (z. B. 1000 Punkte)
     if waveform.len() > 2000 {
-        let excess = waveform.len() - 2000;
-        let new_waveform: SharedVector<f32> = waveform[excess..].into(); // Kopiere nur die letzten 1000 Elemente
+        let excess = waveform.len() - 1000;
+        let new_waveform: SharedVector<(f32, f32)> = waveform[excess..].into(); // Kopiere nur die letzten 1000 Elemente
         *waveform = new_waveform; // Ersetze den alten Vektor
     }
-}
-
-fn render_plot(waveform_data: &[f32], width: i32, height: i32) -> slint::Image {
-    use image::{ImageBuffer, Rgba};
-
-    // Erstelle ein leeres Bild
-    let mut img = ImageBuffer::from_pixel(width.try_into().unwrap(), height.try_into().unwrap(), Rgba([0, 0, 0, 255]));
-
-    // Zeichne die Wellenform
-    let center_y = height as f32 / 2.0;
-
-    // Ermittle das Maximum aus waveform_data
-    let max_amplitude = waveform_data
-        .iter()
-        .cloned()
-        .fold(0.0_f32, |a, b| a.max(b.abs()));
-
-    let scale = if max_amplitude > 0.0 { 1.0 / max_amplitude } else { 1.0 };
-
-    for (i, chunk) in waveform_data.chunks(2).enumerate() {
-        if i >= width as usize {
-            break;
-        }
-
-        let x = i as u32;
-        // Skaliere die Amplitude auf den maximalen Wert, damit die Darstellung immer voll ausgesteuert ist
-        let y_min = center_y + chunk[0] * center_y * scale;
-        let y_max = center_y + chunk[1] * center_y * scale;
-
-        img.put_pixel(x as u32, center_y as u32, Rgba([100, 100, 255, 255]));
-
-        if y_min >= 0.0 && y_min < height as f32 {
-            // Zeichne eine Linie von center_y nach y_min (vertikal)
-            let y0 = center_y as u32;
-            let y1 = y_min as u32;
-            if y0 != y1 {
-                let (start, end) = if y0 < y1 { (y0 - 1, y1) } else { (y1, y0 - 1) };
-                for y in start..=end {
-                    if y >= 0 as u32 && y < height as u32 {
-                        img.put_pixel(x, y, Rgba([0, 255, 0, 255])); // Grün für Min-Linie
-                    }
-                }
-            }
-        }
-        if y_max >= 0.0 && y_max < height as f32 {
-            // Zeichne eine Linie von center_y nach y_max (vertikal)
-            let y0 = center_y as u32;
-            let y1 = y_max as u32;
-            if y0 != y1 {
-                let (start, end) = if y0 < y1 { (y0 + 1, y1) } else { (y1, y0 + 1) };
-                for y in start..=end {
-                    if y >= 0 as u32 && y < height as u32 {
-                        img.put_pixel(x, y, Rgba([255, 100, 100, 255])); // Rot für Min-Linie
-                    }
-                }
-            }
-        }
-    }
-
-    // Konvertiere das Bild in ein SharedPixelBuffer
-    let buffer = SharedPixelBuffer::clone_from_slice(&img.into_raw(), width.try_into().unwrap(), height.try_into().unwrap());
-    slint::Image::from_rgba8_premultiplied(buffer)
 }
 
 fn err_fn(err: cpal::StreamError) {
